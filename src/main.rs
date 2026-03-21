@@ -73,3 +73,49 @@ impl<T: Default, const A: usize, const B: usize> TieredVec2<T, A, B> {
         replace(&mut self.blocks[block_idx][*head], value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TieredVec2;
+    use fastrand::Rng;
+
+    fn check<const B: usize>(tiered: &TieredVec2<i32, B, B>, vec: &[i32]) {
+        assert_eq!(tiered.n, vec.len());
+
+        for (idx, expected) in vec.iter().enumerate() {
+            assert_eq!(
+                *tiered.get(idx),
+                *expected,
+                "mismatch at index {idx} for block size {B}"
+            );
+        }
+    }
+
+    fn run_randomized_insert_get_test<const B: usize>() {
+        let mut tiered = TieredVec2::<i32, B, B>::new();
+        let mut vec = Vec::new();
+        let mut rng = Rng::with_seed(0x1234_5678_9abc_def0);
+        let capacity = B * B;
+
+        for _ in 0..capacity {
+            let idx = rng.usize(..=vec.len());
+            let value = rng.i32(..);
+            tiered.insert(idx, value);
+            vec.insert(idx, value);
+
+            check(&tiered, &vec);
+        }
+
+        check(&tiered, &vec);
+    }
+
+    #[test]
+    fn tiered_vec2_randomized_insert_and_get_match_vec_model() {
+        run_randomized_insert_get_test::<4>();
+        run_randomized_insert_get_test::<8>();
+        run_randomized_insert_get_test::<16>();
+        run_randomized_insert_get_test::<32>();
+        run_randomized_insert_get_test::<64>();
+        run_randomized_insert_get_test::<128>();
+    }
+}
