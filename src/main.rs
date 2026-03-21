@@ -13,7 +13,7 @@ pub struct TieredVec2<T, const A: usize, const B: usize> {
     /// Pointer to the first element of each block.
     head: [usize; A],
     /// The actual blocks of data.
-    blocks: [[T; B]; A],
+    blocks: Box<[[T; B]; A]>,
 }
 
 /// 3 level structure:
@@ -27,7 +27,7 @@ pub struct TieredVec3<T, const A: usize, const B: usize, const C: usize> {
     /// Pointer to the first element of each block.
     head: [[usize; B]; A],
     /// The actual blocks of data.
-    blocks: [[[T; C]; B]; A],
+    blocks: Box<[[[T; C]; B]; A]>,
 }
 
 // Notation:
@@ -40,7 +40,7 @@ impl<T: Default, const A: usize, const B: usize> TieredVec2<T, A, B> {
         Self {
             n: 0,
             head: [0; A],
-            blocks: std::array::from_fn(|_| std::array::from_fn(|_| T::default())),
+            blocks: Box::new(std::array::from_fn(|_| std::array::from_fn(|_| T::default()))),
         }
     }
 
@@ -94,9 +94,9 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
             n: 0,
             super_head: [0; A],
             head: std::array::from_fn(|_| [0; B]),
-            blocks: std::array::from_fn(|_| {
+            blocks: Box::new(std::array::from_fn(|_| {
                 std::array::from_fn(|_| std::array::from_fn(|_| T::default()))
-            }),
+            })),
         }
     }
 
