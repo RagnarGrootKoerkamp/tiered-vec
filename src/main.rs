@@ -50,9 +50,11 @@ impl<T, const A: usize, const B: usize> TieredVec2<T, A, B> {
             value = replace(&mut self.blocks[i][j], value);
             j = 0;
         }
-        // now j < head or j=head=0
-        self.blocks[i][j..head].rotate_right(1);
-        replace(&mut self.blocks[i][j], value)
+        if j < head {
+            self.blocks[i][j..head].rotate_right(1);
+            value = replace(&mut self.blocks[i][j], value);
+        }
+        value
     }
 
     /// Push a new smallest value to a block and return the largest value that doesn't fit anymore.
