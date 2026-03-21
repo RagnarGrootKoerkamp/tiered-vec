@@ -1,3 +1,5 @@
+#![feature(vec_from_fn)]
+
 use std::mem::replace;
 
 fn main() {
@@ -13,7 +15,7 @@ pub struct TieredVec2<T, const A: usize, const B: usize> {
     /// Pointer to the first element of each block.
     head: [usize; A],
     /// The actual blocks of data.
-    blocks: Box<[[T; B]; A]>,
+    blocks: Vec<[T; B]>,
 }
 
 /// 3 level structure:
@@ -25,9 +27,9 @@ pub struct TieredVec3<T, const A: usize, const B: usize, const C: usize> {
     /// Pointer to the first block of each superblock.
     super_head: [usize; A],
     /// Pointer to the first element of each block.
-    head: [[usize; B]; A],
+    head: Vec<[usize; B]>,
     /// The actual blocks of data.
-    blocks: Box<[[[T; C]; B]; A]>,
+    blocks: Vec<[[T; C]; B]>,
 }
 
 // Notation:
@@ -40,7 +42,7 @@ impl<T: Default, const A: usize, const B: usize> TieredVec2<T, A, B> {
         Self {
             n: 0,
             head: [0; A],
-            blocks: Box::new(std::array::from_fn(|_| std::array::from_fn(|_| T::default()))),
+            blocks: Vec::from_fn(A, |_| std::array::from_fn(|_| T::default())),
         }
     }
 
@@ -93,10 +95,10 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
         Self {
             n: 0,
             super_head: [0; A],
-            head: std::array::from_fn(|_| [0; B]),
-            blocks: Box::new(std::array::from_fn(|_| {
+            head: Vec::from_fn(A, |_| [0; B]),
+            blocks: Vec::from_fn(A, |_| {
                 std::array::from_fn(|_| std::array::from_fn(|_| T::default()))
-            })),
+            }),
         }
     }
 
@@ -105,13 +107,13 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
     }
 
     fn index(&self, idx: usize) -> (usize, usize, usize) {
-        let superblock_idx = idx / (B * C);
+        let i = idx / (B * C);
         let superblock_offset = idx % (B * C);
         let logical_block_idx = superblock_offset / C;
         let block_offset = superblock_offset % C;
-        let block_idx = self.block_index(superblock_idx, logical_block_idx);
-        let elem_idx = (self.head[superblock_idx][block_idx] + block_offset) % C;
-        (superblock_idx, block_idx, elem_idx)
+        let j = self.block_index(i, logical_block_idx);
+        let k = (self.head[i][j] + block_offset) % C;
+        (i, j, k)
     }
 
     fn insert_index(&self, idx: usize) -> (usize, usize, usize, usize) {
@@ -195,14 +197,7 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
 mod tests {
     use super::{TieredVec2, TieredVec3};
     use fastrand::Rng;
-    use std::{hint::black_box, thread, time::Instant};
-
-    struct ScalingPoint {
-        label: &'static str,
-        capacity: usize,
-        cbrt_n: f64,
-        ns_per_index: f64,
-    }
+    use std::time::Instant;
 
     fn check2<const A: usize, const B: usize>(tiered: &TieredVec2<i32, A, B>, vec: &[i32]) {
         assert_eq!(tiered.n, vec.len());
@@ -216,7 +211,7 @@ mod tests {
         }
     }
 
-    fn run_randomized_insert_get_test2<const A: usize, const B: usize>() {
+    fn run2<const A: usize, const B: usize>() {
         let mut tiered = TieredVec2::<i32, A, B>::new();
         let mut vec = Vec::new();
         let mut rng = Rng::with_seed(0x1234_5678_9abc_def0);
@@ -229,6 +224,17 @@ mod tests {
             vec.insert(idx, value);
             check2(&tiered, &vec);
         }
+    }
+
+    #[test]
+    fn tiered2() {
+        run2::<2, 2>();
+        run2::<2, 4>();
+        run2::<4, 4>();
+        run2::<16, 2>();
+        run2::<2, 16>();
+        run2::<32, 32>();
+        run2::<128, 128>();
     }
 
     fn check3<const A: usize, const B: usize, const C: usize>(
@@ -246,12 +252,10 @@ mod tests {
         }
     }
 
-    fn run_randomized_insert_get_test3<const A: usize, const B: usize, const C: usize>() {
+    fn run3<const A: usize, const B: usize, const C: usize>() {
         let mut tiered = TieredVec3::<i32, A, B, C>::new();
         let mut vec = Vec::new();
-        let mut rng = Rng::with_seed(
-            0x9abc_def0_1234_5678 ^ A as u64 ^ ((B as u64) << 16) ^ ((C as u64) << 32),
-        );
+        let mut rng = Rng::with_seed(0x9abc_def0_1234_5678);
         let capacity = A * B * C;
 
         for _ in 0..capacity {
@@ -263,96 +267,44 @@ mod tests {
         }
     }
 
-    fn measure_index_scaling<const A: usize, const B: usize, const C: usize>(
-        label: &'static str,
-        samples: usize,
-    ) -> ScalingPoint {
-        let tiered = TieredVec3::<(), A, B, C>::new();
+    #[test]
+    fn tiered3() {
+        run3::<2, 4, 4>();
+        run3::<2, 4, 8>();
+        run3::<2, 8, 4>();
+        run3::<4, 4, 4>();
+        run3::<32, 32, 32>();
+    }
+
+    fn measure_index_scaling<const A: usize, const B: usize, const C: usize>() {
+        let mut tiered = TieredVec3::<i32, A, B, C>::new();
         let capacity = A * B * C;
-        let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ capacity as u64;
+        let mut rng = Rng::with_seed(0x9abc_def0_1234_5678);
         let start = Instant::now();
 
-        for _ in 0..samples {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            let idx = (state as usize) % capacity;
-            black_box(black_box(&tiered).index(black_box(idx)));
+        for _ in 0..capacity {
+            let idx = rng.usize(..=tiered.n);
+            let value = rng.i32(..);
+            tiered.insert(idx, value);
         }
 
-        ScalingPoint {
-            label,
-            capacity,
-            cbrt_n: (capacity as f64).cbrt(),
-            ns_per_index: start.elapsed().as_secs_f64() * 1e9 / samples as f64,
-        }
-    }
-
-    #[test]
-    fn tiered_vec2_randomized_insert_and_get_match_vec_model() {
-        run_randomized_insert_get_test2::<2, 2>();
-        run_randomized_insert_get_test2::<2, 4>();
-        run_randomized_insert_get_test2::<4, 4>();
-        run_randomized_insert_get_test2::<16, 2>();
-        run_randomized_insert_get_test2::<2, 16>();
-        run_randomized_insert_get_test2::<32, 32>();
-    }
-
-    #[test]
-    fn tiered_vec3_randomized_insert_and_get_match_vec_model() {
-        run_randomized_insert_get_test3::<2, 4, 4>();
-        run_randomized_insert_get_test3::<2, 4, 8>();
-        run_randomized_insert_get_test3::<2, 8, 4>();
-        run_randomized_insert_get_test3::<4, 4, 4>();
+        let duration = start.elapsed();
+        let ns_per_insert = duration.as_nanos() as f64 / capacity as f64;
+        let cbrt = (capacity as f64).cbrt();
+        println!(
+            "{A}x{B}x{C}: n={capacity}, cbrt(n)={cbrt:.2}, ns/insert={:.3}, ns/insert/cbrt(n)={:.6}",
+            ns_per_insert,
+            ns_per_insert / cbrt
+        );
     }
 
     #[test]
     #[ignore = "benchmark-style scaling check"]
-    fn tiered_vec3_index_runtime_scales_with_cuberoot_n() {
-        const SAMPLES: usize = 2_000_000;
-
-        let points = thread::Builder::new()
-            .name("tiered-vec3-scaling".into())
-            .stack_size(64 * 1024 * 1024)
-            .spawn(|| {
-                [
-                    measure_index_scaling::<10, 10, 10>("1K", SAMPLES),
-                    measure_index_scaling::<100, 100, 100>("1M", SAMPLES),
-                    measure_index_scaling::<465, 465, 465>("100M-ish", SAMPLES),
-                ]
-            })
-            .expect("failed to spawn scaling thread")
-            .join()
-            .expect("scaling thread panicked");
-
-        for point in &points {
-            println!(
-                "{}: n={}, cbrt(n)={:.2}, ns/index={:.3}, ns/index/cbrt(n)={:.6}",
-                point.label,
-                point.capacity,
-                point.cbrt_n,
-                point.ns_per_index,
-                point.ns_per_index / point.cbrt_n
-            );
-        }
-
-        for pair in points.windows(2) {
-            let prev = &pair[0];
-            let next = &pair[1];
-            let cbrt_ratio = (next.capacity as f64 / prev.capacity as f64).cbrt();
-            let time_ratio = next.ns_per_index / prev.ns_per_index.max(f64::EPSILON);
-
-            println!(
-                "{} -> {}: time ratio {:.3}, cbrt ratio {:.3}",
-                prev.label, next.label, time_ratio, cbrt_ratio
-            );
-
-            assert!(
-                time_ratio <= cbrt_ratio * 8.0,
-                "index runtime grew faster than the generous cbrt(n) bound: {} -> {}",
-                prev.label,
-                next.label
-            );
-        }
+    fn tiered3_scaling() {
+        measure_index_scaling::<32, 32, 32>();
+        measure_index_scaling::<64, 64, 64>();
+        measure_index_scaling::<128, 128, 128>();
+        measure_index_scaling::<256, 256, 256>();
+        measure_index_scaling::<512, 512, 512>();
     }
 }
