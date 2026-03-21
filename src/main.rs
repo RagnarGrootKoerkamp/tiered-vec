@@ -100,14 +100,37 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
         }
     }
 
+    fn block_index(&self, superblock_idx: usize, logical_block_idx: usize) -> usize {
+        (self.super_head[superblock_idx] + logical_block_idx) % B
+    }
+
     fn index(&self, idx: usize) -> (usize, usize, usize) {
         let superblock_idx = idx / (B * C);
         let superblock_offset = idx % (B * C);
         let logical_block_idx = superblock_offset / C;
         let block_offset = superblock_offset % C;
-        let block_idx = (self.super_head[superblock_idx] + logical_block_idx) % B;
+        let block_idx = self.block_index(superblock_idx, logical_block_idx);
         let elem_idx = (self.head[superblock_idx][block_idx] + block_offset) % C;
         (superblock_idx, block_idx, elem_idx)
+    }
+
+    fn insert_index(&self, idx: usize) -> (usize, usize, usize, usize) {
+        let superblock_idx = idx / (B * C);
+        let superblock_offset = idx % (B * C);
+        let logical_block_idx = superblock_offset / C;
+        let block_offset = superblock_offset % C;
+        let block_idx = self.block_index(superblock_idx, logical_block_idx);
+        let elem_idx = (self.head[superblock_idx][block_idx] + block_offset) % C;
+        (superblock_idx, logical_block_idx, block_idx, elem_idx)
+    }
+
+    fn superblock_count(&self) -> usize {
+        self.n.div_ceil(B * C)
+    }
+
+    fn block_count(&self, superblock_idx: usize) -> usize {
+        let used = self.n.saturating_sub(superblock_idx * B * C).min(B * C);
+        used.div_ceil(C)
     }
 
     pub fn get(&self, idx: usize) -> &T {
@@ -115,15 +138,56 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
         &self.blocks[i][j][k]
     }
 
-    pub fn insert(&mut self, idx: usize, mut value: T) {
+    pub fn insert(&mut self, idx: usize, value: T) {
         assert!(idx <= self.n, "insert index out of bounds");
         assert!(self.n < A * B * C, "TieredVec is already full");
         self.n += 1;
 
-        for pos in idx..self.n {
-            let (i, j, k) = self.index(pos);
-            value = replace(&mut self.blocks[i][j][k], value);
+        let (superblock_idx, logical_block_idx, block_idx, elem_idx) = self.insert_index(idx);
+        let mut value = self.insert_in_block(superblock_idx, block_idx, elem_idx, value);
+
+        for next_logical_block in (logical_block_idx + 1)..self.block_count(superblock_idx) {
+            let next_block_idx = self.block_index(superblock_idx, next_logical_block);
+            value = self.rotate_block(superblock_idx, next_block_idx, value);
         }
+
+        for next_superblock_idx in (superblock_idx + 1)..self.superblock_count() {
+            value = self.rotate_superblock(next_superblock_idx, value);
+        }
+    }
+
+    fn insert_in_block(
+        &mut self,
+        superblock_idx: usize,
+        block_idx: usize,
+        mut elem_idx: usize,
+        mut value: T,
+    ) -> T {
+        let head = self.head[superblock_idx][block_idx];
+        if elem_idx >= head {
+            self.blocks[superblock_idx][block_idx][elem_idx..].rotate_right(1);
+            value = replace(&mut self.blocks[superblock_idx][block_idx][elem_idx], value);
+            elem_idx = 0;
+        }
+        if elem_idx < head {
+            self.blocks[superblock_idx][block_idx][elem_idx..head].rotate_right(1);
+            value = replace(&mut self.blocks[superblock_idx][block_idx][elem_idx], value);
+        }
+        value
+    }
+
+    fn rotate_block(&mut self, superblock_idx: usize, block_idx: usize, value: T) -> T {
+        let head = &mut self.head[superblock_idx][block_idx];
+        *head = (*head + C - 1) % C;
+        replace(&mut self.blocks[superblock_idx][block_idx][*head], value)
+    }
+
+    fn rotate_superblock(&mut self, superblock_idx: usize, mut value: T) -> T {
+        for logical_block_idx in 0..self.block_count(superblock_idx) {
+            let block_idx = self.block_index(superblock_idx, logical_block_idx);
+            value = self.rotate_block(superblock_idx, block_idx, value);
+        }
+        value
     }
 }
 
