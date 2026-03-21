@@ -21,11 +21,20 @@ pub struct TieredVec2<T, const A: usize, const B: usize> {
 // i: block index
 // j: index within block in raw data
 
-impl<T, const A: usize, const B: usize> TieredVec2<T, A, B> {
+impl<T: Default, const A: usize, const B: usize> TieredVec2<T, A, B> {
+    pub fn new() -> Self {
+        Self {
+            n: 0,
+            head: [0; A],
+            blocks: std::array::from_fn(|_| std::array::from_fn(|_| T::default())),
+        }
+    }
+
     fn index(&self, idx: usize) -> (usize, usize) {
         let i = idx / B;
         (i, (self.head[i] + idx % B) % B)
     }
+
     pub fn get(&self, idx: usize) -> &T {
         let (i, j) = self.index(idx);
         &self.blocks[i][j]
