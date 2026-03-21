@@ -195,6 +195,14 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
 mod tests {
     use super::{TieredVec2, TieredVec3};
     use fastrand::Rng;
+    use std::{hint::black_box, thread, time::Instant};
+
+    struct ScalingPoint {
+        label: &'static str,
+        capacity: usize,
+        cbrt_n: f64,
+        ns_per_index: f64,
+    }
 
     fn check2<const A: usize, const B: usize>(tiered: &TieredVec2<i32, A, B>, vec: &[i32]) {
         assert_eq!(tiered.n, vec.len());
@@ -255,6 +263,31 @@ mod tests {
         }
     }
 
+    fn measure_index_scaling<const A: usize, const B: usize, const C: usize>(
+        label: &'static str,
+        samples: usize,
+    ) -> ScalingPoint {
+        let tiered = TieredVec3::<(), A, B, C>::new();
+        let capacity = A * B * C;
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ capacity as u64;
+        let start = Instant::now();
+
+        for _ in 0..samples {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let idx = (state as usize) % capacity;
+            black_box(black_box(&tiered).index(black_box(idx)));
+        }
+
+        ScalingPoint {
+            label,
+            capacity,
+            cbrt_n: (capacity as f64).cbrt(),
+            ns_per_index: start.elapsed().as_secs_f64() * 1e9 / samples as f64,
+        }
+    }
+
     #[test]
     fn tiered_vec2_randomized_insert_and_get_match_vec_model() {
         run_randomized_insert_get_test2::<2, 2>();
@@ -271,5 +304,55 @@ mod tests {
         run_randomized_insert_get_test3::<2, 4, 8>();
         run_randomized_insert_get_test3::<2, 8, 4>();
         run_randomized_insert_get_test3::<4, 4, 4>();
+    }
+
+    #[test]
+    #[ignore = "benchmark-style scaling check"]
+    fn tiered_vec3_index_runtime_scales_with_cuberoot_n() {
+        const SAMPLES: usize = 2_000_000;
+
+        let points = thread::Builder::new()
+            .name("tiered-vec3-scaling".into())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                [
+                    measure_index_scaling::<10, 10, 10>("1K", SAMPLES),
+                    measure_index_scaling::<100, 100, 100>("1M", SAMPLES),
+                    measure_index_scaling::<465, 465, 465>("100M-ish", SAMPLES),
+                ]
+            })
+            .expect("failed to spawn scaling thread")
+            .join()
+            .expect("scaling thread panicked");
+
+        for point in &points {
+            println!(
+                "{}: n={}, cbrt(n)={:.2}, ns/index={:.3}, ns/index/cbrt(n)={:.6}",
+                point.label,
+                point.capacity,
+                point.cbrt_n,
+                point.ns_per_index,
+                point.ns_per_index / point.cbrt_n
+            );
+        }
+
+        for pair in points.windows(2) {
+            let prev = &pair[0];
+            let next = &pair[1];
+            let cbrt_ratio = (next.capacity as f64 / prev.capacity as f64).cbrt();
+            let time_ratio = next.ns_per_index / prev.ns_per_index.max(f64::EPSILON);
+
+            println!(
+                "{} -> {}: time ratio {:.3}, cbrt ratio {:.3}",
+                prev.label, next.label, time_ratio, cbrt_ratio
+            );
+
+            assert!(
+                time_ratio <= cbrt_ratio * 8.0,
+                "index runtime grew faster than the generous cbrt(n) bound: {} -> {}",
+                prev.label,
+                next.label
+            );
+        }
     }
 }
