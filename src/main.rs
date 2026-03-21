@@ -16,6 +16,20 @@ pub struct TieredVec2<T, const A: usize, const B: usize> {
     blocks: [[T; B]; A],
 }
 
+/// 3 level structure:
+/// A superblocks of B blocks of size C
+pub struct TieredVec3<T, const A: usize, const B: usize, const C: usize> {
+    /// Current number of elements
+    n: usize,
+
+    /// Pointer to the first block of each superblock.
+    super_head: [usize; A],
+    /// Pointer to the first element of each block.
+    head: [[usize; B]; A],
+    /// The actual blocks of data.
+    blocks: [[[T; C]; B]; A],
+}
+
 // Notation:
 // idx: external array index
 // i: block index
@@ -74,48 +88,124 @@ impl<T: Default, const A: usize, const B: usize> TieredVec2<T, A, B> {
     }
 }
 
+impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A, B, C> {
+    pub fn new() -> Self {
+        Self {
+            n: 0,
+            super_head: [0; A],
+            head: std::array::from_fn(|_| [0; B]),
+            blocks: std::array::from_fn(|_| {
+                std::array::from_fn(|_| std::array::from_fn(|_| T::default()))
+            }),
+        }
+    }
+
+    fn index(&self, idx: usize) -> (usize, usize, usize) {
+        let superblock_idx = idx / (B * C);
+        let superblock_offset = idx % (B * C);
+        let logical_block_idx = superblock_offset / C;
+        let block_offset = superblock_offset % C;
+        let block_idx = (self.super_head[superblock_idx] + logical_block_idx) % B;
+        let elem_idx = (self.head[superblock_idx][block_idx] + block_offset) % C;
+        (superblock_idx, block_idx, elem_idx)
+    }
+
+    pub fn get(&self, idx: usize) -> &T {
+        let (i, j, k) = self.index(idx);
+        &self.blocks[i][j][k]
+    }
+
+    pub fn insert(&mut self, idx: usize, mut value: T) {
+        assert!(idx <= self.n, "insert index out of bounds");
+        assert!(self.n < A * B * C, "TieredVec is already full");
+        self.n += 1;
+
+        for pos in idx..self.n {
+            let (i, j, k) = self.index(pos);
+            value = replace(&mut self.blocks[i][j][k], value);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::TieredVec2;
+    use super::{TieredVec2, TieredVec3};
     use fastrand::Rng;
 
-    fn check<const B: usize>(tiered: &TieredVec2<i32, B, B>, vec: &[i32]) {
+    fn check2<const A: usize, const B: usize>(tiered: &TieredVec2<i32, A, B>, vec: &[i32]) {
         assert_eq!(tiered.n, vec.len());
 
         for (idx, expected) in vec.iter().enumerate() {
             assert_eq!(
                 *tiered.get(idx),
                 *expected,
-                "mismatch at index {idx} for block size {B}"
+                "TieredVec2 mismatch at index {idx} for block size {B}"
             );
         }
     }
 
-    fn run_randomized_insert_get_test<const B: usize>() {
-        let mut tiered = TieredVec2::<i32, B, B>::new();
+    fn run_randomized_insert_get_test2<const A: usize, const B: usize>() {
+        let mut tiered = TieredVec2::<i32, A, B>::new();
         let mut vec = Vec::new();
         let mut rng = Rng::with_seed(0x1234_5678_9abc_def0);
-        let capacity = B * B;
+        let capacity = A * B;
 
         for _ in 0..capacity {
             let idx = rng.usize(..=vec.len());
             let value = rng.i32(..);
             tiered.insert(idx, value);
             vec.insert(idx, value);
-
-            check(&tiered, &vec);
+            check2(&tiered, &vec);
         }
+    }
 
-        check(&tiered, &vec);
+    fn check3<const A: usize, const B: usize, const C: usize>(
+        tiered: &TieredVec3<i32, A, B, C>,
+        vec: &[i32],
+    ) {
+        assert_eq!(tiered.n, vec.len());
+
+        for (idx, expected) in vec.iter().enumerate() {
+            assert_eq!(
+                *tiered.get(idx),
+                *expected,
+                "TieredVec3 mismatch at index {idx} for shape ({A}, {B}, {C})"
+            );
+        }
+    }
+
+    fn run_randomized_insert_get_test3<const A: usize, const B: usize, const C: usize>() {
+        let mut tiered = TieredVec3::<i32, A, B, C>::new();
+        let mut vec = Vec::new();
+        let mut rng = Rng::with_seed(
+            0x9abc_def0_1234_5678 ^ A as u64 ^ ((B as u64) << 16) ^ ((C as u64) << 32),
+        );
+        let capacity = A * B * C;
+
+        for _ in 0..capacity {
+            let idx = rng.usize(..=vec.len());
+            let value = rng.i32(..);
+            tiered.insert(idx, value);
+            vec.insert(idx, value);
+            check3(&tiered, &vec);
+        }
     }
 
     #[test]
     fn tiered_vec2_randomized_insert_and_get_match_vec_model() {
-        run_randomized_insert_get_test::<4>();
-        run_randomized_insert_get_test::<8>();
-        run_randomized_insert_get_test::<16>();
-        run_randomized_insert_get_test::<32>();
-        run_randomized_insert_get_test::<64>();
-        run_randomized_insert_get_test::<128>();
+        run_randomized_insert_get_test2::<2, 2>();
+        run_randomized_insert_get_test2::<2, 4>();
+        run_randomized_insert_get_test2::<4, 4>();
+        run_randomized_insert_get_test2::<16, 2>();
+        run_randomized_insert_get_test2::<2, 16>();
+        run_randomized_insert_get_test2::<32, 32>();
+    }
+
+    #[test]
+    fn tiered_vec3_randomized_insert_and_get_match_vec_model() {
+        run_randomized_insert_get_test3::<2, 4, 4>();
+        run_randomized_insert_get_test3::<2, 4, 8>();
+        run_randomized_insert_get_test3::<2, 8, 4>();
+        run_randomized_insert_get_test3::<4, 4, 4>();
     }
 }
