@@ -276,7 +276,41 @@ mod tests {
         run3::<32, 32, 32>();
     }
 
-    fn measure_index_scaling<const A: usize, const B: usize, const C: usize>() {
+    fn run_scaling2<const A: usize, const B: usize>() {
+        let mut tiered = TieredVec2::<i32, A, B>::new();
+        let capacity = A * B;
+        let mut rng = Rng::with_seed(0x9abc_def0_1234_5678);
+        let start = Instant::now();
+
+        for _ in 0..capacity {
+            let idx = rng.usize(..=tiered.n);
+            let value = rng.i32(..);
+            tiered.insert(idx, value);
+        }
+
+        let duration = start.elapsed();
+        let ns_per_insert = duration.as_nanos() as f64 / capacity as f64;
+        let sqrt = (capacity as f64).sqrt();
+        println!(
+            "{A}x{B}: n={capacity}, sqrt(n)={sqrt:.2}, ns/insert={:.3}, ns/insert/sqrt(n)={:.6}",
+            ns_per_insert,
+            ns_per_insert / sqrt
+        );
+    }
+
+    #[test]
+    #[ignore = "benchmark-style scaling check"]
+    fn scaling2() {
+        run_scaling2::<32, 32>();
+        run_scaling2::<64, 64>();
+        run_scaling2::<128, 128>();
+        run_scaling2::<256, 256>();
+        run_scaling2::<512, 512>();
+        run_scaling2::<1024, 1024>();
+        run_scaling2::<2048, 2048>();
+    }
+
+    fn run_scaling3<const A: usize, const B: usize, const C: usize>() {
         let mut tiered = TieredVec3::<i32, A, B, C>::new();
         let capacity = A * B * C;
         let mut rng = Rng::with_seed(0x9abc_def0_1234_5678);
@@ -300,11 +334,14 @@ mod tests {
 
     #[test]
     #[ignore = "benchmark-style scaling check"]
-    fn tiered3_scaling() {
-        measure_index_scaling::<32, 32, 32>();
-        measure_index_scaling::<64, 64, 64>();
-        measure_index_scaling::<128, 128, 128>();
-        measure_index_scaling::<256, 256, 256>();
-        measure_index_scaling::<512, 512, 512>();
+    fn scaling3() {
+        run_scaling3::<16, 16, 16>();
+        run_scaling3::<32, 32, 32>();
+        run_scaling3::<64, 64, 64>();
+        run_scaling3::<64, 64, 128>();
+        run_scaling3::<64, 128, 128>();
+        run_scaling3::<128, 128, 128>();
+        run_scaling3::<256, 256, 256>();
+        run_scaling3::<512, 512, 512>();
     }
 }
