@@ -9,3 +9,6 @@ Both use the implicit heap-like layout.
 Currently only supports `insert` and `get`. Resizing is not supported.
 
 Tests and the 3-level index were written by copilot and refined by me.
+
+NOTE: Currently, the 3-level index has complexity $n^{2/3}$ instead of
+$n^{1/3}$.
