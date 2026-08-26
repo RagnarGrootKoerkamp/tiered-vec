@@ -12,7 +12,7 @@ pub struct TieredVec2<T, const A: usize, const B: usize> {
     /// Current number of elements
     n: usize,
 
-    /// Pointer to the first element of each block.
+    /// Index < B of the first element of each block.
     head: [usize; A],
     /// The actual blocks of data.
     blocks: Vec<[T; B]>,
@@ -24,9 +24,9 @@ pub struct TieredVec3<T, const A: usize, const B: usize, const C: usize> {
     /// Current number of elements
     n: usize,
 
-    /// Pointer to the first block of each superblock.
+    /// Index < B*C of the first element of each superblock.
     super_head: [usize; A],
-    /// Pointer to the first element of each block.
+    /// Index < C of the first element of each block.
     head: Vec<[usize; B]>,
     /// The actual blocks of data.
     blocks: Vec<[[T; C]; B]>,
@@ -106,38 +106,37 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
         (self.super_head[superblock_idx] + logical_block_idx) % B
     }
 
-    fn index(&self, idx: usize) -> (usize, usize, usize) {
+    fn index(&self, mut idx: usize) -> (usize, usize, usize) {
+        let i = idx / (B * C);
+        idx = (idx + self.super_head[i]) % (B * C);
+        let j = idx / C;
+        idx = (idx + self.head[i][j]) % C;
+        let k = idx;
+        (i, j, k)
+    }
+
+    pub fn get(&self, idx: usize) -> &T {
+        let (i, j, k) = self.index(idx);
+        &self.blocks[i][j][k]
+    }
+
+    fn insert_index(&self, idx: usize) -> (usize, usize, usize, usize) {
         let i = idx / (B * C);
         let superblock_offset = idx % (B * C);
         let logical_block_idx = superblock_offset / C;
         let block_offset = superblock_offset % C;
-        let j = self.block_index(i, logical_block_idx);
-        let k = (self.head[i][j] + block_offset) % C;
-        (i, j, k)
-    }
-
-    fn insert_index(&self, idx: usize) -> (usize, usize, usize, usize) {
-        let superblock_idx = idx / (B * C);
-        let superblock_offset = idx % (B * C);
-        let logical_block_idx = superblock_offset / C;
-        let block_offset = superblock_offset % C;
-        let block_idx = self.block_index(superblock_idx, logical_block_idx);
-        let elem_idx = (self.head[superblock_idx][block_idx] + block_offset) % C;
-        (superblock_idx, logical_block_idx, block_idx, elem_idx)
+        let block_idx = self.block_index(i, logical_block_idx);
+        let elem_idx = (self.head[i][block_idx] + block_offset) % C;
+        (i, logical_block_idx, block_idx, elem_idx)
     }
 
     fn superblock_count(&self) -> usize {
         self.n.div_ceil(B * C)
     }
 
-    fn block_count(&self, superblock_idx: usize) -> usize {
-        let used = self.n.saturating_sub(superblock_idx * B * C).min(B * C);
+    fn block_count(&self, i: usize) -> usize {
+        let used = self.n.saturating_sub(i * B * C).min(B * C);
         used.div_ceil(C)
-    }
-
-    pub fn get(&self, idx: usize) -> &T {
-        let (i, j, k) = self.index(idx);
-        &self.blocks[i][j][k]
     }
 
     pub fn insert(&mut self, idx: usize, value: T) {
@@ -178,16 +177,16 @@ impl<T: Default, const A: usize, const B: usize, const C: usize> TieredVec3<T, A
         value
     }
 
-    fn rotate_block(&mut self, superblock_idx: usize, block_idx: usize, value: T) -> T {
-        let head = &mut self.head[superblock_idx][block_idx];
+    fn rotate_block(&mut self, i: usize, j: usize, value: T) -> T {
+        let head = &mut self.head[i][j];
         *head = (*head + C - 1) % C;
-        replace(&mut self.blocks[superblock_idx][block_idx][*head], value)
+        replace(&mut self.blocks[i][j][*head], value)
     }
 
-    fn rotate_superblock(&mut self, superblock_idx: usize, mut value: T) -> T {
-        for logical_block_idx in 0..self.block_count(superblock_idx) {
-            let block_idx = self.block_index(superblock_idx, logical_block_idx);
-            value = self.rotate_block(superblock_idx, block_idx, value);
+    fn rotate_superblock(&mut self, i: usize, mut value: T) -> T {
+        for logical_block_idx in 0..self.block_count(i) {
+            let block_idx = self.block_index(i, logical_block_idx);
+            value = self.rotate_block(i, block_idx, value);
         }
         value
     }
